@@ -1,7 +1,8 @@
 import requests
 import datetime
 import json
-from pprint import pprint
+from tqdm import tqdm
+import logging
 from config import access_token
 
 
@@ -40,9 +41,12 @@ class YANDEX:
 
 class VK(YANDEX):
     def __init__(self, access_token, version='5.199'):
-        self.user_id = input('Введите ваш id "Вконтакте": ')
-        if not self.user_id.isdigit():
-            raise ValueError('ID должен быть в цифровом формате')
+        while True:
+            self.vk_id = input('Введите ваш id "Вконтакте" (только цифры): ')
+            if self.vk_id.isdigit():
+                break
+            else:
+                print('ID должен быть в цифровом формате. Пожалуйста, попробуйте снова.')
 
         token_ya = input('Введите ваш токен сервиса Яндекс.Диск: ')
 
@@ -53,13 +57,13 @@ class VK(YANDEX):
 
     def users_info(self):
         url = 'https://api.vk.com/method/users.get'
-        params = {'user_ids': self.user_id}
+        params = {'user_ids': self.vk_id}
         response = requests.get(url, params={**self.params, **params})
         return response.json()
 
     def vk_get_photos(self, offset=0, count=5):
         response = requests.get('https://api.vk.com/method/photos.get', params={
-            'owner_id': self.user_id,
+            'owner_id': self.vk_id,
             'access_token': self.token,
             'offset': offset,
             'count': count,
@@ -75,65 +79,47 @@ class VK(YANDEX):
         dt = datetime.datetime.fromtimestamp(unix_time)
         return dt
 
-    def get_files_urls(self):
+    def get_photos_info(self):
         photos_data = []
 
         photos_response = self.vk_get_photos()
         if 'response' in photos_response and 'items' in photos_response['response']:
             for item in photos_response['response']['items']:
-                human_readable_date = self.unix_time_to_time(item['date'])
-                likes = item['likes']['count']
                 for size in item['sizes']:
                     if size['type'] == 'z':
-                        photo_url = size['url']
+                        likes = item['likes']['count']
+                        human_readable_date = self.unix_time_to_time(item['date']).strftime('%Y%m%d_%H%M%S')
+                        file_name = f"{likes}"
+                        if any(photo['file_name'] == file_name for photo in photos_data):
+                            file_name += f"_{human_readable_date}"
                         photo_info = {
-                            'url': photo_url,
-                            'date': human_readable_date,
-                            'likes': likes
+                            'file_name': file_name,
+                            'size': size['type'],
+                            'url': size['url']
                         }
                         photos_data.append(photo_info)
-
-        # Сортировка фотографий по количеству лайков и дате загрузки
-        photos_data.sort(key=lambda x: (x['likes'], x['date']), reverse=True)
-
-        # Создание списка имен файлов
-        file_names = []
-        for photo in photos_data:
-            base_name = f"{photo['likes']}_likes"
-            if file_names.count(base_name) > 0:
-                base_name += f"_{photo['date'].strftime('%Y%m%d_%H%M%S')}"
-            file_names.append(base_name)
-
-        # Создание структуры для сохранения в JSON
-        json_data = []
-        for i, photo in enumerate(photos_data):
-            json_data.append({
-                'file_name': file_names[i],
-                'url': photo['url'],
-                'date': photo['date'].strftime('%Y-%m-%d %H:%M:%S'),
-                'likes': photo['likes']
-            })
+        filtered_photos_data = [{'file_name': photo['file_name'], 'size': photo['size']} for photo in photos_data]
 
         # Сохранение в JSON-файл
-        with open('photos_data.json', 'w') as json_file:
-            json.dump(json_data, json_file, indent=4)
+        with open('filtered_photos_data.json', 'w') as json_file:
+            json.dump(filtered_photos_data, json_file)
 
-        return json_data
+        return photos_data
 
     def upload_photos_to_yandex_disk(self, folder_name):
         # Создание папки на Яндекс.Диске
         self.create_folder(folder_name)
 
         # Получение данных о фотографиях
-        photos_data = self.get_files_urls()
+        photos_data = self.get_photos_info()
 
-        # Загрузка фотографий на Яндекс.Диск
-        for photo in photos_data:
-            file_name = f"{photo['file_name']}.jpg"
+        # Загрузка фотографий на Яндекс.Диск с прогресс-баром
+        for photo in tqdm(photos_data, desc="Загрузка фотографий на Яндекс.Диск"):
+            file_name = photo['file_name']
             file_url = photo['url']
             self.put_file_to_folder(file_name, folder_name, file_url)
 
-        print(f"Все фотографии загружены в папку {folder_name} на Яндекс.Диске.")
+        logging.info(f"Все фотографии загружены в папку {folder_name} на Яндекс.Диске.")
 
 
 # Пример использования
